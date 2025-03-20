@@ -1,0 +1,55 @@
+from nba_api.stats.endpoints import playergamelog
+from nba_api.stats.static import players
+import pandas as pd
+import time
+from tqdm import tqdm
+import os
+from datetime import datetime
+
+# Specify the output path for the CSV file
+csv_file_path = r"C:/Users/11487/OneDrive/Documents/Python/Prize Picks Project/Current_Season.csv"
+
+# Fetch the list of all current NBA players
+all_players = players.get_players()
+current_players = [player for player in all_players if player['is_active']]
+
+# Initialize an empty DataFrame to store game logs
+game_logs_df = pd.DataFrame()
+
+# Loop through each current player and fetch their game logs for the current season
+for player in tqdm(current_players, desc="Processing players"):
+    player_id = player['id']
+    player_name = player['full_name']
+    
+    try:
+        # Fetch game logs for the current season
+        game_log = playergamelog.PlayerGameLog(player_id=player_id, season='2024-25')
+        game_log_data = game_log.get_data_frames()[0]
+        
+        # Add player name to the game logs
+        game_log_data['PLAYER_ID'] = player_id
+        game_log_data['PLAYER_NAME'] = player_name
+        
+        # Append the game logs to the DataFrame
+        game_logs_df = pd.concat([game_logs_df, game_log_data], ignore_index=True)
+    
+    except Exception as e:
+        print(f"Error fetching data for player {player_name} (ID: {player_id}): {e}")
+        continue
+    
+    # To avoid hitting the rate limit, pause for a short time
+    time.sleep(0.5)
+
+# Add a timestamp column with the current date and time
+game_logs_df['Timestamp'] = datetime.now().strftime('%Y-%m-%d %H:%M:%S')
+
+# Ensure the directory exists
+os.makedirs(os.path.dirname(csv_file_path), exist_ok=True)
+
+# Export the DataFrame to a CSV file at the specified path
+game_logs_df.to_csv(csv_file_path, index=False, encoding='utf-8-sig')
+
+print(f"All game logs have been scraped and saved to {csv_file_path}")
+
+# Output the DataFrame with game logs
+print(game_logs_df)
