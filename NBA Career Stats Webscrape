@@ -1,0 +1,45 @@
+from nba_api.stats.endpoints import playercareerstats
+from nba_api.stats.static import players
+import pandas as pd
+import time
+from tqdm import tqdm
+from datetime import datetime
+
+# Fetch the list of all current NBA players
+all_players = players.get_players()
+current_players = [player for player in all_players if player['is_active']]
+
+# Initialize an empty list to store career averages
+career_averages_list = []
+
+# Loop through each current player and fetch their career stats
+for player in tqdm(current_players, desc="Processing players"):
+    player_id = player['id']
+    player_name = player['full_name']
+    
+    # Fetch career stats for the player
+    career = playercareerstats.PlayerCareerStats(player_id=player_id)
+    career_data = career.get_data_frames()[0]
+
+    # Calculate career averages
+    career_averages = career_data.mean(numeric_only=True)
+    career_averages['PLAYER_ID'] = player_id
+    career_averages['PLAYER_NAME'] = player_name
+    
+    # Append the career averages to the list
+    career_averages_list.append(career_averages)
+    
+    # To avoid hitting the rate limit, pause for a short time
+    time.sleep(0.5)
+
+# Convert the list of career averages to a DataFrame
+career_averages_df = pd.DataFrame(career_averages_list)
+
+# Add a timestamp column with the current date and time
+career_averages_df['Timestamp'] = datetime.now().strftime('%Y-%m-%d %H:%M:%S')
+
+# Export the DataFrame to a CSV file
+career_averages_df.to_csv('career_averages.csv', index=False)
+
+# Output the DataFrame with career averages
+print(career_averages_df)
