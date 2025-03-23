@@ -1,0 +1,41 @@
+import gspread
+from google.oauth2.service_account import Credentials
+import pandas as pd
+
+# Define the scope and credentials file for Google Sheets API
+SCOPE = ["https://spreadsheets.google.com/feeds", "https://www.googleapis.com/auth/drive"]
+CREDS_FILE = r"C:\Users\11487\OneDrive\Documents\Python\Prize Picks Project\Google Service Account JSON Key.json"  # Replace with the path to your credentials file
+
+# Authenticate and create a client to interact with the Google Sheets API
+credentials = Credentials.from_service_account_file(CREDS_FILE, scopes=SCOPE)
+client = gspread.authorize(credentials)
+
+# Open the Google Sheets file
+spreadsheet = client.open('Prize Picks Predictor')  # Replace with your Google Sheets file name
+
+# Define the CSV file paths and corresponding sheet names
+csv_files = {
+    r"C:\Users\11487\OneDrive\Documents\Python\Prize Picks Project\prizepicks_propsv2.csv": 'Sheet19',  # Replace with your CSV file path and sheet name
+    r"C:\Users\11487\OneDrive\Documents\Python\Prize Picks Project\Underdog_Scrape.csv": 'Sheet20',  # Replace with your CSV file path and sheet name
+    r"C:\Users\11487\OneDrive\Documents\Python\Prize Picks Project\Current_Season.csv": 'Sheet21'  # Replace with your CSV file path and sheet name
+}
+
+# Function to import CSV data into a specific sheet
+def import_csv_to_sheet(csv_file, sheet_name):
+    # Read the CSV file into a DataFrame
+    df = pd.read_csv(csv_file)
+    
+    # Select the sheet to update
+    sheet = spreadsheet.worksheet(sheet_name)
+    
+    # Clear the existing content in the sheet
+    sheet.clear()
+    
+    # Update the sheet with the new data
+    sheet.update([df.columns.values.tolist()] + df.values.tolist())
+
+# Import each CSV file into the corresponding sheet
+for csv_file, sheet_name in csv_files.items():
+    import_csv_to_sheet(csv_file, sheet_name)
+
+print("CSV files have been successfully imported into the Google Sheets file.")
