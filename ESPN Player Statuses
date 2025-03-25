@@ -1,0 +1,71 @@
+from selenium.webdriver.common.by import By
+from selenium.webdriver.support.ui import WebDriverWait
+from selenium.webdriver.support import expected_conditions as EC
+import undetected_chromedriver as uc
+import pandas as pd
+from datetime import datetime
+
+# Set up Chrome options
+chrome_options = uc.ChromeOptions()
+driver = uc.Chrome(options=chrome_options)
+
+# URL to scrape
+url = "https://www.espn.com/nba/injuries"
+
+# Open the website
+print("Opening the website...")
+driver.get(url)
+
+# Wait for the table to appear
+print("Waiting for the injury table to load...")
+try:
+    WebDriverWait(driver, 20).until(
+        EC.presence_of_element_located((By.CLASS_NAME, "Table"))
+    )
+    print("Injury table loaded.")
+except:
+    print("Table not found. Exiting...")
+    driver.quit()
+    exit()
+
+# Find all injury tables on the page
+tables = driver.find_elements(By.CLASS_NAME, "Table")
+
+if not tables:
+    print("No injury tables found.")
+    driver.quit()
+    exit()
+
+# Extract data from each table
+players_data = []
+
+for table in tables:
+    rows = table.find_elements(By.TAG_NAME, "tr")[1:]  # Skip header row
+
+    for row in rows:
+        cols = row.find_elements(By.TAG_NAME, "td")
+        if len(cols) >= 5:
+            name = cols[0].text.strip()
+            position = cols[1].text.strip()  # Position column
+            est_return_date = cols[2].text.strip()
+            status = cols[3].text.strip()
+            comment = cols[4].text.strip()
+
+            print(f"Extracted: {name}, {position}, {status}, {est_return_date}, {comment}")
+
+            players_data.append([name, position, status, est_return_date, comment])
+
+# Convert to DataFrame
+df = pd.DataFrame(players_data, columns=["Name", "Position", "Status", "Est Return Date", "Comment"])
+
+# Save to CSV if data is available
+csv_file_path = r"C:\Users\11487\OneDrive\Documents\Python\Prize Picks Project\player_status.csv"
+if not df.empty:
+    df.to_csv(csv_file_path, index=False)
+    print(f"Data successfully saved to {csv_file_path}")
+else:
+    print("No data scraped. Check the website structure.")
+
+# Close the driver
+driver.quit()
+print("Driver closed.")
