@@ -1,0 +1,92 @@
+from nba_api.stats.endpoints import playergamelog
+from nba_api.stats.static import players
+import pandas as pd
+import time
+from tqdm import tqdm
+import os
+from datetime import datetime
+import random
+
+def fetch_current_players():
+    """Fetches all active players."""
+    all_players = players.get_players()
+    current_players = [player for player in all_players if player['is_active']]
+    return current_players
+
+def fetch_player_game_logs(player_id, player_name, season='2024-25', season_type='Playoffs', retries=3, timeout=60):
+    """
+    Fetches game logs for a player with retry and exponential backoff.
+    """
+    attempt = 0
+    while attempt < retries:
+        try:
+            # Increase timeout for API requests
+            game_log = playergamelog.PlayerGameLog(
+                player_id=player_id, season=season, season_type_all_star=season_type, timeout=timeout
+            )
+            game_log_data = game_log.get_data_frames()[0]
+            game_log_data['PLAYER_ID'] = player_id
+            game_log_data['PLAYER_NAME'] = player_name
+            game_log_data['SEASON_TYPE'] = season_type  # Add season type for distinction
+            return game_log_data
+        except Exception as e:
+            attempt += 1
+            print(f"Error fetching data for player {player_name} (ID: {player_id}) on attempt {attempt}: {e}")
+            if attempt < retries:
+                backoff_time = random.uniform(2, 5) * attempt  # Exponential backoff with jitter
+                print(f"Retrying in {backoff_time:.2f} seconds...")
+                time.sleep(backoff_time)
+    print(f"Failed to fetch data for player {player_name} (ID: {player_id}) after {retries} attempts.")
+    return None
+
+def save_to_csv(df, file_path):
+    """Saves the DataFrame to a CSV file."""
+    if not df.empty:
+        df['Timestamp'] = datetime.now().strftime('%Y-%m-%d %H:%M:%S')
+        os.makedirs(os.path.dirname(file_path), exist_ok=True)
+        df.to_csv(file_path, index=False, encoding='utf-8-sig')
+        print(f"All game logs have been scraped and saved to {file_path}")
+    else:
+        print("No data to save.")
+
+def main():
+    """
+    Main function to fetch and save game logs for active players.
+    Includes retry logic, rate limiting, and progress saving.
+    """
+    csv_file_path = r"C:/Users/11487/OneDrive/Documents/Python/Prize Picks Project/Playoff_Game_Logs.csv"
+    current_players = fetch_current_players()
+    game_logs_df = pd.DataFrame()
+    processed_players = set()  # Track processed players to avoid duplication
+
+    # Load progress if CSV already exists
+    if os.path.exists(csv_file_path):
+        existing_data = pd.read_csv(csv_file_path)
+        if not existing_data.empty:
+            processed_players = set(existing_data['PLAYER_ID'])
+            game_logs_df = existing_data
+            print(f"Resuming from previously saved data. {len(processed_players)} players already processed.")
+
+    for player in tqdm(current_players, desc="Processing players"):
+        player_id = player['id']
+        player_name = player['full_name']
+
+        # Skip players that have already been processed
+        if player_id in processed_players:
+            continue
+
+        # Fetch playoff logs
+        playoff_logs = fetch_player_game_logs(player_id, player_name, season_type='Playoffs')
+        if playoff_logs is not None:
+            game_logs_df = pd.concat([game_logs_df, playoff_logs], ignore_index=True)
+        
+        # Save progress after each player
+        save_to_csv(game_logs_df, csv_file_path)
+
+        # Global delay to prevent API overload
+        time.sleep(0.5)
+
+    print(game_logs_df)
+
+if __name__ == "__main__":
+    main()
