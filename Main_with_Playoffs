@@ -1,0 +1,25 @@
+import import_ipynb
+import PrizePicks_Scrapev3
+import PlayerStatus_Scrapev2
+import CurrentSeason_and_Playoffs
+import Team_Game_Logs
+
+def main():
+    print("Starting PrizePicks scraper...")
+    PrizePicks_Scrapev3.main()
+    print("PrizePicks scraper completed.")
+    
+    print("Starting ESPN injuries scraper...")
+    PlayerStatus_Scrapev2.main()
+    print("ESPN injuries scraper completed.")
+    
+    print("Starting NBA playoff game logs scraper...")
+    CurrentSeason_and_Playoffs.main()
+    print("NBA game logs scraper completed.")
+    
+    print("Starting NBA team game logs scraper...")
+    Team_Game_Logs.main()
+    print("NBA team game logs scraper completed.")
+
+if __name__ == "__main__":
+    main()
