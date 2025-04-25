@@ -1,0 +1,49 @@
+from nba_api.stats.endpoints import teamgamelog
+from nba_api.stats.static import teams
+import pandas as pd
+import time
+from tqdm import tqdm
+import os
+from datetime import datetime
+
+def fetch_current_teams():
+    all_teams = teams.get_teams()
+    return all_teams
+
+def fetch_team_game_logs(team_id, team_name, season='2024-25'):
+    try:
+        game_log = teamgamelog.TeamGameLog(team_id=team_id, season=season)
+        game_log_data = game_log.get_data_frames()[0]
+        game_log_data['TEAM_ID'] = team_id
+        game_log_data['TEAM_NAME'] = team_name
+        return game_log_data
+    except Exception as e:
+        print(f"Error fetching data for team {team_name} (ID: {team_id}): {e}")
+        return None
+
+def save_to_csv(df, file_path):
+    df['Timestamp'] = datetime.now().strftime('%Y-%m-%d %H:%M:%S')
+    os.makedirs(os.path.dirname(file_path), exist_ok=True)
+    df.to_csv(file_path, index=False, encoding='utf-8-sig')
+    print(f"All game logs have been scraped and saved to {file_path}")
+
+def main():
+    csv_file_path = r"C:/Users/11487/OneDrive/Documents/Python/Prize Picks Project/Current_Season_TeamLogs.csv"
+    current_teams = fetch_current_teams()
+    game_logs_df = pd.DataFrame()
+
+    for team in tqdm(current_teams, desc="Processing teams"):
+        team_id = team['id']
+        team_name = team['full_name']
+        game_log_data = fetch_team_game_logs(team_id, team_name)
+
+        if game_log_data is not None:
+            game_logs_df = pd.concat([game_logs_df, game_log_data], ignore_index=True)
+        
+        time.sleep(0.5)
+
+    save_to_csv(game_logs_df, csv_file_path)
+    print(game_logs_df)
+
+if __name__ == "__main__":
+    main()
