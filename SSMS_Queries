@@ -1,0 +1,773 @@
+SELECT *
+  FROM [Sportsbooks].[dbo].[prizepicks_nba];
+  
+
+--prize picks' stat,payout,matchup,line
+select Name,
+Payout,
+p.Matchup,
+Value
+from [Sportsbooks].[dbo].[prizepicks_nba] p
+left join [NBA].[dbo].[regular_and_playoffs] cs on p.Name = cs.PLAYER_NAME
+where p.Category  = 'Points';
+
+
+
+--Last 7 Game Average (need to paramterize in order to get x games)
+with game_date_rank as (
+select
+player_name,
+PTS,
+row_number() over(partition by player_name order by GAME_DATE desc) as date_rank 
+from [NBA].[dbo].[regular_and_playoffs] cs),
+
+last_7_games as (
+select * from game_date_rank
+where date_rank <= 7)
+
+select player_name,
+avg(PTS) as last_7_games_avg
+from last_7_games
+group by player_name;
+
+
+
+--Last x games vs matchup (currently fixed to 3)
+with last_Xgames_matchup as (
+select Name,
+substring(Matchup, 4, 3) as matchup_clean
+from [Sportsbooks].[dbo].[prizepicks_nba] pp),
+
+game_date_rank as (
+select
+PLAYER_NAME,
+PTS,
+right(Matchup,3) as matchup_clean,
+row_number() over(partition by player_name order by GAME_DATE desc) as date_rank 
+from [NBA].[dbo].[regular_and_playoffs] cs),
+
+last_3_games_matchup as (
+select * from game_date_rank
+where date_rank <= 3)
+
+select 
+lx.player_name,
+CAST(AVG(lx.PTS) AS DECIMAL(10,2)) AS last_3_games_avg
+FROM last_3_games_matchup lx
+left JOIN last_Xgames_matchup pp ON pp.Name = lx.player_name AND pp.matchup_clean = lx.matchup_clean
+GROUP BY lx.player_name;
+
+
+
+--Career Average
+with career_avg as (
+select PLAYER_NAME,
+CAST(CAST(PTS AS DECIMAL(10,2)) / NULLIF(CAST(GP AS DECIMAL(10,2)), 0) AS DECIMAL(10,2)) AS pts_per_game
+from [NBA].[dbo].[career_averages])
+
+select *
+from career_avg;
+
+
+
+--Current Season
+SELECT 
+PLAYER_NAME,
+CAST(AVG(CAST(PTS AS DECIMAL(10,2))) AS DECIMAL(10,2)) AS avg_pts
+FROM [NBA].[dbo].[regular_and_playoffs]
+GROUP BY PLAYER_NAME;
+
+
+
+--All Average
+WITH last_7_games AS (
+SELECT player_name,
+AVG(PTS) AS last_7_games_avg
+FROM (
+SELECT 
+player_name,
+PTS,
+ROW_NUMBER() OVER (PARTITION BY player_name ORDER BY GAME_DATE DESC) AS date_rank 
+FROM [NBA].[dbo].[regular_and_playoffs]
+) AS ranked
+WHERE date_rank <= 7
+GROUP BY player_name),
+
+career_avg AS (
+SELECT 
+PLAYER_NAME,
+CAST(CAST(PTS AS DECIMAL(10,2)) / NULLIF(CAST(GP AS DECIMAL(10,2)), 0) AS DECIMAL(10,2)) AS career_avg_pts
+FROM [NBA].[dbo].[career_averages]),
+
+season_avg AS (
+SELECT 
+PLAYER_NAME,
+AVG(CAST(PTS AS DECIMAL(10,2))) AS season_avg_pts
+FROM [NBA].[dbo].[regular_and_playoffs]
+GROUP BY PLAYER_NAME),
+
+last_3_vs_matchup AS (
+SELECT 
+lx.player_name,
+AVG(lx.PTS) AS last_3_games_matchup_avg
+FROM (
+SELECT 
+PLAYER_NAME,
+PTS,
+RIGHT(Matchup, 3) AS matchup_clean,
+ROW_NUMBER() OVER (PARTITION BY PLAYER_NAME ORDER BY GAME_DATE DESC) AS date_rank
+FROM [NBA].[dbo].[regular_and_playoffs]) lx
+LEFT JOIN (
+SELECT Name, SUBSTRING(Matchup, 4, 3) AS matchup_clean
+FROM [Sportsbooks].[dbo].[prizepicks_nba]) pp ON pp.Name = lx.PLAYER_NAME AND pp.matchup_clean = lx.matchup_clean
+WHERE date_rank <= 3
+GROUP BY lx.player_name)
+
+
+SELECT 
+COALESCE(sa.PLAYER_NAME, ca.PLAYER_NAME, l7.PLAYER_NAME, lm.PLAYER_NAME) AS PLAYER_NAME,
+CAST(sa.season_avg_pts AS DECIMAL(10,2)) AS season_avg_pts,
+CAST(ca.career_avg_pts AS DECIMAL(10,2)) AS career_avg_pts,
+CAST(l7.last_7_games_avg AS DECIMAL(10,2)) AS last_7_games_avg,
+CAST(lm.last_3_games_matchup_avg AS DECIMAL(10,2)) AS last_3_games_matchup_avg,
+    
+CAST((
+COALESCE(sa.season_avg_pts, 0) +
+COALESCE(ca.career_avg_pts, 0) +
+COALESCE(l7.last_7_games_avg, 0) +
+COALESCE(lm.last_3_games_matchup_avg, 0)) / 4.0 AS DECIMAL(10,2)) AS avg_of_all_4
+FROM season_avg sa
+FULL OUTER JOIN career_avg ca ON sa.PLAYER_NAME = ca.PLAYER_NAME
+FULL OUTER JOIN last_7_games l7 ON sa.PLAYER_NAME = l7.player_name OR ca.PLAYER_NAME = l7.player_name
+FULL OUTER JOIN last_3_vs_matchup lm ON sa.PLAYER_NAME = lm.player_name OR ca.PLAYER_NAME = lm.player_name;
+
+
+
+
+--% games hitting over on current line for current season
+WITH player_lines AS (
+SELECT DISTINCT 
+Name, 
+Value AS line_value
+FROM [Sportsbooks].[dbo].[prizepicks_nba]
+WHERE Category = 'Points'),
+
+season_games AS (
+SELECT 
+PLAYER_ID,
+GAME_ID,
+PLAYER_NAME,
+PTS
+FROM [NBA].[dbo].[regular_and_playoffs])
+
+SELECT 
+gl.PLAYER_NAME,
+pl.line_value,
+COUNT(*) AS games_played,
+SUM(CASE WHEN gl.PTS > pl.line_value THEN 1 ELSE 0 END) AS games_over,
+ROUND(100.0 * SUM(CASE WHEN gl.PTS > pl.line_value THEN 1 ELSE 0 END) / COUNT(*),2) AS pct_games_over_line
+FROM season_games gl
+left JOIN player_lines pl ON gl.PLAYER_NAME = pl.Name
+GROUP BY gl.PLAYER_NAME, pl.line_value
+ORDER BY gl.PLAYER_NAME, pl.line_value;
+
+
+--% games hitting over on current line for x games (currently fixed at 7)
+WITH player_lines AS (
+SELECT DISTINCT 
+Name, 
+Value AS line_value
+FROM [Sportsbooks].[dbo].[prizepicks_nba]
+WHERE Category = 'Points'),
+
+last_7_games AS (
+SELECT 
+PLAYER_ID,
+GAME_ID,
+PLAYER_NAME,
+PTS,
+ROW_NUMBER() OVER (PARTITION BY PLAYER_NAME ORDER BY GAME_DATE DESC) AS rn
+FROM [NBA].[dbo].[regular_and_playoffs]),
+
+filtered_games AS (
+SELECT *
+FROM last_7_games
+WHERE rn <= 7)
+
+SELECT 
+g.PLAYER_NAME,
+pl.line_value,
+COUNT(*) AS games_played,
+SUM(CASE WHEN g.PTS > pl.line_value THEN 1 ELSE 0 END) AS games_over,
+ROUND(100.0 * SUM(CASE WHEN g.PTS > pl.line_value THEN 1 ELSE 0 END) / COUNT(*),2) AS pct_games_over_line
+FROM filtered_games g
+LEFT JOIN player_lines pl ON g.PLAYER_NAME = pl.Name
+GROUP BY g.PLAYER_NAME, pl.line_value
+ORDER BY g.PLAYER_NAME, pl.line_value;
+
+
+--% games hitting over on current line for last x games same matchup (currently fixed to 3)
+WITH player_lines AS (
+SELECT DISTINCT 
+Name,
+Value AS line_value,
+SUBSTRING(Matchup, 4, 3) AS matchup_clean
+FROM [Sportsbooks].[dbo].[prizepicks_nba]
+WHERE Category = 'Points'),
+
+ranked_games AS (
+SELECT
+PLAYER_ID,
+GAME_ID,
+PLAYER_NAME,
+PTS,
+RIGHT(MATCHUP, 3) AS matchup_clean,
+GAME_DATE,
+ROW_NUMBER() OVER (PARTITION BY PLAYER_NAME, RIGHT(MATCHUP, 3)
+ORDER BY GAME_DATE DESC) AS rn
+FROM [NBA].[dbo].[regular_and_playoffs]),
+
+last_3_matchup_games AS (
+SELECT *
+FROM ranked_games
+WHERE rn <= 3)
+
+SELECT 
+g.PLAYER_NAME,
+pl.line_value,
+pl.matchup_clean,
+COUNT(*) AS games_played,
+SUM(CASE WHEN g.PTS > pl.line_value THEN 1 ELSE 0 END) AS games_over,
+ROUND(100.0 * SUM(CASE WHEN g.PTS > pl.line_value THEN 1 ELSE 0 END) / COUNT(*), 2) AS pct_games_over_line
+FROM last_3_matchup_games g
+LEFT JOIN player_lines pl ON g.PLAYER_NAME = pl.Name AND g.matchup_clean = pl.matchup_clean
+GROUP BY g.PLAYER_NAME, pl.line_value, pl.matchup_clean
+ORDER BY g.PLAYER_NAME, pl.matchup_clean;
+
+
+--Last x games minutes growth slope (currently fixed to 7)
+WITH game_date_rank AS (
+SELECT
+player_name,
+CAST(MIN AS FLOAT) AS MIN,
+ROW_NUMBER() OVER (PARTITION BY player_name ORDER BY GAME_DATE DESC) AS date_rank_desc
+FROM [NBA].[dbo].[regular_and_playoffs]),
+
+last_7_games AS (
+SELECT 
+player_name,
+MIN,
+8 - date_rank_desc AS game_number
+FROM game_date_rank
+WHERE date_rank_desc <= 7),
+
+slope_calc AS (
+SELECT 
+player_name,
+COUNT(*) AS n,
+SUM(game_number * MIN) AS sum_xy,
+SUM(game_number) AS sum_x,
+SUM(MIN) AS sum_y,
+SUM(POWER(game_number, 2)) AS sum_x2
+FROM last_7_games
+GROUP BY player_name)
+
+SELECT 
+player_name,
+ROUND(1.0 * (n * sum_xy - sum_x * sum_y) / NULLIF(n * sum_x2 - POWER(sum_x, 2), 0),4) AS min_slope
+FROM slope_calc;
+
+
+--Prop Line Rank
+WITH player_lines AS (
+SELECT DISTINCT 
+Name,
+payout,
+Value AS line_value,
+SUBSTRING(Matchup, 4, 3) AS matchup_clean
+FROM [Sportsbooks].[dbo].[prizepicks_nba]
+WHERE Category = 'Points'),
+
+lines_rank as (
+select DISTINCT 
+Name,
+payout,
+line_value,
+row_number() over(partition by Name, payout order by line_value) as line_rank
+from player_lines)
+
+select *
+from lines_rank
+ORDER BY Name, payout, line_rank;
+
+
+--Back from Injury (Might have to fix)
+WITH recent_games AS (
+SELECT 
+PLAYER_NAME,
+COUNT(*) AS recent_games_played
+FROM [NBA].[dbo].[regular_and_playoffs]
+WHERE GAME_DATE > DATEADD(DAY, -18, GETDATE())
+GROUP BY PLAYER_NAME),
+
+low_activity_players AS (
+SELECT 
+PLAYER_NAME,
+CASE WHEN recent_games_played <= 2 THEN 1
+ELSE 0 END AS low_activity_flag
+FROM recent_games)
+
+SELECT *
+FROM low_activity_players;
+
+
+--Standard Deviation of Current Season
+SELECT 
+PLAYER_NAME,
+ROUND(AVG(CAST(PTS AS DECIMAL(10,2))), 2) AS avg_pts,
+ROUND(STDEV(CAST(PTS AS DECIMAL(10,2))), 2) AS std_dev,
+ROUND(AVG(CAST(PTS AS DECIMAL(10,2))) - STDEV(CAST(PTS AS DECIMAL(10,2))), 2) AS lower_bound_1st_stddev,
+ROUND(AVG(CAST(PTS AS DECIMAL(10,2))) + STDEV(CAST(PTS AS DECIMAL(10,2))), 2) AS upper_bound_1st_stddev
+FROM [NBA].[dbo].[regular_and_playoffs]
+GROUP BY PLAYER_NAME
+ORDER BY PLAYER_NAME;
+
+
+--Standard Deviation of Last x games
+WITH ranked_games AS (
+SELECT
+PLAYER_NAME,
+PTS,
+ROW_NUMBER() OVER (PARTITION BY PLAYER_NAME ORDER BY GAME_DATE DESC) AS game_rank
+FROM [NBA].[dbo].[regular_and_playoffs]),
+
+last_7_games AS (
+SELECT *
+FROM ranked_games
+WHERE game_rank <= 7),
+
+last_7_stats AS (
+SELECT 
+PLAYER_NAME,
+ROUND(AVG(CAST(PTS AS DECIMAL(10,2))), 2) AS avg_pts,
+ROUND(STDEV(CAST(PTS AS DECIMAL(10,2))), 2) AS std_dev,
+ROUND(AVG(CAST(PTS AS DECIMAL(10,2))) - STDEV(CAST(PTS AS DECIMAL(10,2))), 2) AS lower_bound_1st_stddev,
+ROUND(AVG(CAST(PTS AS DECIMAL(10,2))) + STDEV(CAST(PTS AS DECIMAL(10,2))), 2) AS upper_bound_1st_stddev
+FROM last_7_games
+GROUP BY PLAYER_NAME)
+
+SELECT *
+FROM last_7_stats
+ORDER BY PLAYER_NAME;
+
+
+--Back2Back?
+WITH most_recent_game AS (
+SELECT 
+PLAYER_NAME,
+MAX(GAME_DATE) AS last_game_date
+FROM [NBA].[dbo].[regular_and_playoffs]
+GROUP BY PLAYER_NAME),
+
+b2b_flag AS (
+SELECT 
+PLAYER_NAME,
+CASE WHEN last_game_date = CAST(GETDATE() - 1 AS DATE) THEN 'B2B'
+ELSE '' END AS b2b_status
+FROM most_recent_game)
+
+SELECT *
+FROM b2b_flag;
+
+
+--Rookie Tag
+WITH clean_stats_flag AS (
+SELECT
+PLAYER_NAME,
+PTS, REB, AST, STL, BLK, TOV,
+CASE WHEN 
+PTS = FLOOR(PTS) AND
+REB = FLOOR(REB) AND
+AST = FLOOR(AST) AND
+STL = FLOOR(STL) AND
+BLK = FLOOR(BLK) AND
+TOV = FLOOR(TOV)
+THEN '(R)' ELSE '' END AS all_stats_whole_flag
+FROM [NBA].[dbo].[career_averages])
+
+SELECT player_name,
+all_stats_whole_flag
+FROM clean_stats_flag;
+
+
+--Player Link
+SELECT 
+PLAYER_NAME,
+CONCAT('https://www.nba.com/stats/player/', CAST(PLAYER_ID AS INT)) AS player_url
+FROM [NBA].[dbo].[regular_and_playoffs];
+
+
+--Flag (WIP)
+WITH player_lines AS (
+SELECT DISTINCT 
+Name,
+payout,
+Value AS line_value
+FROM [Sportsbooks].[dbo].[prizepicks_nba]
+WHERE Category = 'Points'),
+
+season_games AS (
+SELECT 
+PLAYER_ID,
+GAME_ID,
+PLAYER_NAME,
+PTS,
+MIN,
+GAME_DATE
+FROM [NBA].[dbo].[regular_and_playoffs]),
+
+pct_games_over_line AS (
+SELECT 
+gl.PLAYER_NAME,
+pl.line_value,
+pl.payout,
+COUNT(*) AS games_played,
+SUM(CASE WHEN gl.PTS > pl.line_value THEN 1 ELSE 0 END) AS games_over,
+ROUND(1.0 * SUM(CASE WHEN gl.PTS > pl.line_value THEN 1 ELSE 0 END) / COUNT(*), 4) AS pct_games_over_line
+FROM season_games gl
+LEFT JOIN player_lines pl ON gl.PLAYER_NAME = pl.Name
+GROUP BY gl.PLAYER_NAME, pl.line_value, pl.payout),
+
+recent_games AS (
+SELECT 
+PLAYER_NAME,
+COUNT(*) AS recent_games_played
+FROM [NBA].[dbo].[regular_and_playoffs]
+WHERE GAME_DATE > DATEADD(DAY, -18, GETDATE())
+GROUP BY PLAYER_NAME),
+
+back_from_injury AS (
+SELECT 
+PLAYER_NAME,
+CASE WHEN recent_games_played <= 2 THEN 1 ELSE 0 END AS back_from_injury_flag
+FROM recent_games),
+
+game_date_rank AS (
+SELECT
+player_name,
+MIN,
+GAME_DATE,
+ROW_NUMBER() OVER (PARTITION BY player_name ORDER BY GAME_DATE DESC) AS date_rank_desc
+FROM [NBA].[dbo].[regular_and_playoffs]),
+
+last_7_games AS (
+SELECT 
+player_name,
+MIN,
+8 - date_rank_desc AS game_number
+FROM game_date_rank
+WHERE date_rank_desc <= 7),
+
+slope_calc AS (
+SELECT 
+player_name,
+COUNT(*) AS n,
+SUM(game_number * MIN) AS sum_xy,
+SUM(game_number) AS sum_x,
+SUM(MIN) AS sum_y,
+SUM(POWER(game_number, 2)) AS sum_x2
+FROM last_7_games 
+GROUP BY player_name),
+
+min_growth AS (
+SELECT 
+player_name,
+ROUND(1.0 * (n * sum_xy - sum_x * sum_y) / NULLIF(n * sum_x2 - POWER(sum_x, 2), 0), 4) AS min_slope
+FROM slope_calc),
+
+current_season_avg AS (
+SELECT PLAYER_NAME, AVG(PTS) AS current_avg 
+FROM season_games 
+GROUP BY PLAYER_NAME),
+
+last_7_avg AS (
+SELECT PLAYER_NAME, AVG(PTS) AS last_7_avg 
+FROM (
+SELECT PLAYER_NAME, PTS,
+ROW_NUMBER() OVER (PARTITION BY PLAYER_NAME ORDER BY GAME_DATE DESC) AS rn
+FROM season_games) t
+WHERE rn <= 7
+GROUP BY PLAYER_NAME),
+
+last_3_matchup_avg AS (
+SELECT PLAYER_NAME, AVG(PTS) AS matchup_avg 
+FROM (
+SELECT PLAYER_NAME, PTS,
+ROW_NUMBER() OVER (PARTITION BY PLAYER_NAME ORDER BY GAME_DATE DESC) AS rn
+FROM season_games) t
+WHERE rn <= 3
+GROUP BY PLAYER_NAME),
+
+combined_scores AS (
+SELECT 
+p.PLAYER_NAME,
+p.line_value,
+p.payout,
+p.pct_games_over_line,
+p.games_played,
+b.back_from_injury_flag,
+mg.min_slope,
+cs.current_avg,
+l7.last_7_avg,
+lm.matchup_avg,
+2 * cs.current_avg + 2 * l7.last_7_avg + 2 * lm.matchup_avg AS combined_score
+FROM pct_games_over_line p
+LEFT JOIN back_from_injury b ON p.PLAYER_NAME = b.PLAYER_NAME
+LEFT JOIN min_growth mg ON p.PLAYER_NAME = mg.player_name
+LEFT JOIN current_season_avg cs ON p.PLAYER_NAME = cs.PLAYER_NAME
+LEFT JOIN last_7_avg l7 ON p.PLAYER_NAME = l7.PLAYER_NAME
+LEFT JOIN last_3_matchup_avg lm ON p.PLAYER_NAME = lm.PLAYER_NAME),
+
+ranked_scores AS (
+SELECT *,
+PERCENT_RANK() OVER (PARTITION BY line_value ORDER BY combined_score DESC) AS combined_rank,
+PERCENT_RANK() OVER (ORDER BY current_avg DESC) AS current_avg_rank,
+PERCENT_RANK() OVER (ORDER BY last_7_avg DESC) AS last_7_avg_rank,
+PERCENT_RANK() OVER (ORDER BY matchup_avg DESC) AS matchup_avg_rank
+FROM combined_scores),
+
+final_classification AS (
+SELECT *,
+CASE
+WHEN payout = 'Demon' AND games_played > 3 AND pct_games_over_line > 0.525 AND back_from_injury_flag = 0
+AND current_avg_rank <= 0.75
+AND last_7_avg_rank <= 0.75
+AND matchup_avg_rank <= 0.75
+THEN 'OVER?'
+
+WHEN payout = 'Standard' AND min_slope > -0.5 AND pct_games_over_line < 0.3
+AND combined_rank <= 0.75
+THEN 'UNDER?'
+
+WHEN pct_games_over_line > 0.65 
+AND (payout <> 'Standard' OR min_slope > -0.5)
+AND combined_rank <= 0.75
+AND back_from_injury_flag = 0
+THEN 'OVER!'
+ELSE '' END AS classification
+FROM ranked_scores)
+
+SELECT * 
+FROM final_classification
+WHERE classification IN ('OVER?', 'OVER!', 'UNDER?');
+
+
+
+
+--Key Players Out (need to paramterize)
+with min_per_game as (
+select player_name,
+avg(cast(MIN as decimal(10,2))) as avg_min
+from [NBA].[dbo].[regular_and_playoffs]
+group by player_name),
+
+min_threshold as (
+select *
+from min_per_game
+where avg_min >18)
+
+
+select player_name,
+avg_min
+from min_threshold m
+left join [Player_Status].[dbo].[espn_nba] ps on m.player_name = ps.Name
+where status = 'OUT';
+
+
+--Hot Demons
+WITH player_lines AS (
+SELECT DISTINCT 
+Name, 
+payout,
+category,
+Value AS line_value
+FROM [Sportsbooks].[dbo].[prizepicks_nba]),
+
+season_games AS (
+SELECT 
+PLAYER_ID, GAME_ID, PLAYER_NAME, PTS, AST, REB, TOV, STL, BLK, PF, FGA, FTA, FG3M
+FROM [NBA].[dbo].[regular_and_playoffs]),
+
+current_over_covered AS (
+SELECT 
+gl.PLAYER_NAME,
+pl.line_value,
+pl.payout,
+pl.category,
+COUNT(*) AS games_played,
+SUM(CASE 
+WHEN pl.category = 'Points' AND gl.PTS > pl.line_value THEN 1
+WHEN pl.category = 'Assists' AND gl.AST > pl.line_value THEN 1
+WHEN pl.category = 'Rebounds' AND gl.REB > pl.line_value THEN 1
+WHEN pl.category = '3-PT Made' AND gl.FG3M > pl.line_value THEN 1
+WHEN pl.category = 'Turnovers' AND gl.TOV > pl.line_value THEN 1
+WHEN pl.category = 'Steals' AND gl.STL > pl.line_value THEN 1
+WHEN pl.category = 'Blocked Shots' AND gl.BLK > pl.line_value THEN 1
+WHEN pl.category = 'Personal Fouls' AND gl.PF > pl.line_value THEN 1
+WHEN pl.category = 'FG Attempted' AND gl.FGA > pl.line_value THEN 1
+WHEN pl.category = 'Free Throws Attempted' AND gl.FTA > pl.line_value THEN 1
+WHEN pl.category = 'Pts+Rebs' AND (gl.PTS + gl.REB) > pl.line_value THEN 1
+WHEN pl.category = 'Rebs+Asts' AND (gl.REB + gl.AST) > pl.line_value THEN 1 ELSE 0 END) AS games_over,
+ROUND(100.0 * SUM(CASE 
+WHEN pl.category = 'Points' AND gl.PTS > pl.line_value THEN 1
+WHEN pl.category = 'Assists' AND gl.AST > pl.line_value THEN 1
+WHEN pl.category = 'Rebounds' AND gl.REB > pl.line_value THEN 1
+WHEN pl.category = '3-PT Made' AND gl.FG3M > pl.line_value THEN 1
+WHEN pl.category = 'Turnovers' AND gl.TOV > pl.line_value THEN 1
+WHEN pl.category = 'Steals' AND gl.STL > pl.line_value THEN 1
+WHEN pl.category = 'Blocked Shots' AND gl.BLK > pl.line_value THEN 1
+WHEN pl.category = 'Personal Fouls' AND gl.PF > pl.line_value THEN 1
+WHEN pl.category = 'FG Attempted' AND gl.FGA > pl.line_value THEN 1
+WHEN pl.category = 'Free Throws Attempted' AND gl.FTA > pl.line_value THEN 1
+WHEN pl.category = 'Pts+Rebs' AND (gl.PTS + gl.REB) > pl.line_value THEN 1
+WHEN pl.category = 'Rebs+Asts' AND (gl.REB + gl.AST) > pl.line_value THEN 1
+ELSE 0 END) / COUNT(*),2) AS pct_games_over_line
+
+FROM season_games gl
+LEFT JOIN player_lines pl ON gl.PLAYER_NAME = pl.Name
+GROUP BY gl.PLAYER_NAME, pl.line_value, pl.payout, pl.category)
+
+SELECT 
+player_name,
+category,
+line_value,
+payout,
+pct_games_over_line
+FROM current_over_covered
+WHERE payout = 'Demon' AND pct_games_over_line > 52.5
+ORDER BY pct_games_over_line DESC;
+
+
+
+--High Standards
+WITH player_lines AS (
+SELECT DISTINCT 
+Name, 
+payout,
+category,
+Value AS line_value
+FROM [Sportsbooks].[dbo].[prizepicks_nba]),
+
+season_games AS (
+SELECT 
+PLAYER_ID, GAME_ID, PLAYER_NAME, PTS, AST, REB, TOV, STL, BLK, PF, FGA, FTA, FG3M
+FROM [NBA].[dbo].[regular_and_playoffs]),
+
+current_over_covered AS (
+SELECT 
+gl.PLAYER_NAME,
+pl.line_value,
+pl.payout,
+pl.category,
+COUNT(*) AS games_played,
+SUM(CASE 
+WHEN pl.category = 'Points' AND gl.PTS > pl.line_value THEN 1
+WHEN pl.category = 'Assists' AND gl.AST > pl.line_value THEN 1
+WHEN pl.category = 'Rebounds' AND gl.REB > pl.line_value THEN 1
+WHEN pl.category = '3-PT Made' AND gl.FG3M > pl.line_value THEN 1
+WHEN pl.category = 'Turnovers' AND gl.TOV > pl.line_value THEN 1
+WHEN pl.category = 'Steals' AND gl.STL > pl.line_value THEN 1
+WHEN pl.category = 'Blocked Shots' AND gl.BLK > pl.line_value THEN 1
+WHEN pl.category = 'Personal Fouls' AND gl.PF > pl.line_value THEN 1
+WHEN pl.category = 'FG Attempted' AND gl.FGA > pl.line_value THEN 1
+WHEN pl.category = 'Free Throws Attempted' AND gl.FTA > pl.line_value THEN 1
+WHEN pl.category = 'Pts+Rebs' AND (gl.PTS + gl.REB) > pl.line_value THEN 1
+WHEN pl.category = 'Rebs+Asts' AND (gl.REB + gl.AST) > pl.line_value THEN 1 ELSE 0 END) AS games_over,
+ROUND(100.0 * SUM(CASE 
+WHEN pl.category = 'Points' AND gl.PTS > pl.line_value THEN 1
+WHEN pl.category = 'Assists' AND gl.AST > pl.line_value THEN 1
+WHEN pl.category = 'Rebounds' AND gl.REB > pl.line_value THEN 1
+WHEN pl.category = '3-PT Made' AND gl.FG3M > pl.line_value THEN 1
+WHEN pl.category = 'Turnovers' AND gl.TOV > pl.line_value THEN 1
+WHEN pl.category = 'Steals' AND gl.STL > pl.line_value THEN 1
+WHEN pl.category = 'Blocked Shots' AND gl.BLK > pl.line_value THEN 1
+WHEN pl.category = 'Personal Fouls' AND gl.PF > pl.line_value THEN 1
+WHEN pl.category = 'FG Attempted' AND gl.FGA > pl.line_value THEN 1
+WHEN pl.category = 'Free Throws Attempted' AND gl.FTA > pl.line_value THEN 1
+WHEN pl.category = 'Pts+Rebs' AND (gl.PTS + gl.REB) > pl.line_value THEN 1
+WHEN pl.category = 'Rebs+Asts' AND (gl.REB + gl.AST) > pl.line_value THEN 1
+ELSE 0 END) / COUNT(*),2) AS pct_games_over_line
+
+FROM season_games gl
+LEFT JOIN player_lines pl ON gl.PLAYER_NAME = pl.Name
+GROUP BY gl.PLAYER_NAME, pl.line_value, pl.payout, pl.category)
+
+SELECT 
+player_name,
+category,
+line_value,
+payout,
+pct_games_over_line
+FROM current_over_covered
+WHERE payout = 'Standard' AND pct_games_over_line > 60
+ORDER BY pct_games_over_line DESC;
+
+
+--Opp DEF Rank against Stat (need to parameterize for all stats)
+WITH team_abbrev_extracted AS (
+SELECT 
+RIGHT(matchup, 3) AS opp_abr,
+PTS
+FROM [NBA].[dbo].[current_season_team_logs]),
+
+team_with_ids AS (
+SELECT 
+t.opp_abr,
+l.team_id,
+t.PTS
+FROM (
+SELECT 
+RIGHT(matchup, 3) AS opp_abr,
+PTS
+FROM [NBA].[dbo].[current_season_team_logs]) t
+left JOIN [NBA].[dbo].[team_id_lookup] l ON t.opp_abr = l.team_alias),
+
+team_avg_pts AS (
+SELECT 
+opp_abr,
+ROUND(AVG(PTS), 2) AS avg_pts_allowed
+FROM team_with_ids
+GROUP BY opp_abr),
+
+team_ranked AS (
+SELECT 
+opp_abr,
+avg_pts_allowed,
+RANK() OVER (ORDER BY avg_pts_allowed ASC) AS pts_defense_rank
+FROM team_avg_pts)
+
+SELECT *
+FROM team_ranked
+ORDER BY pts_defense_rank;
+
+
+--Smash (same as flag but with higher % threshold. Best idea is to only use flag but parameterize the threshold value)
+
+--Smash Win Rate
+
+--Player Name Cleaned
+
+--Playoff Team?
+
+
+
+
+
+
+
+
+
+
+
+
+
